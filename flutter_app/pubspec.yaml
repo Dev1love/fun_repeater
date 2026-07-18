@@ -1,0 +1,27 @@
+name: zadom_napered
+description: "Задом наперёд — забавная игра: запиши слово, послушай его наоборот и попробуй повторить."
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # Запись аудио в WAV (PCM16) — формат, который легко развернуть по сэмплам.
+  record: ^5.1.2
+  # Воспроизведение локальных файлов (прямая и перевёрнутая запись).
+  audioplayers: ^6.1.0
+  # Каталог для временных файлов записей.
+  path_provider: ^2.1.4
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
