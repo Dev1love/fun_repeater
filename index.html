@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#0f172a">
+<title>Задом наперёд — игра</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: linear-gradient(160deg, #0f172a, #1e293b);
+    color: #f1f5f9;
+    overscroll-behavior: none;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px 18px calc(20px + env(safe-area-inset-bottom));
+    min-height: 100%;
+  }
+  h1 {
+    font-size: 1.4rem;
+    font-weight: 700;
+    text-align: center;
+    margin: 8px 0 2px;
+  }
+  .subtitle {
+    font-size: 0.85rem;
+    color: #94a3b8;
+    text-align: center;
+    margin: 0 0 18px;
+    max-width: 340px;
+    line-height: 1.4;
+  }
+  .buttons {
+    width: 100%;
+    max-width: 460px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    flex: 1;
+    justify-content: center;
+  }
+  button.pad {
+    width: 100%;
+    border: none;
+    border-radius: 20px;
+    padding: 22px 18px;
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: #fff;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    text-align: left;
+    transition: transform 0.08s ease, filter 0.15s ease, opacity 0.15s ease;
+    box-shadow: 0 8px 22px rgba(0,0,0,0.35);
+    line-height: 1.25;
+  }
+  button.pad:active { transform: scale(0.97); }
+  button.pad:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
+  .icon {
+    font-size: 1.8rem;
+    flex-shrink: 0;
+    width: 38px;
+    text-align: center;
+  }
+  .label { display: flex; flex-direction: column; }
+  .label small { font-weight: 400; font-size: 0.78rem; opacity: 0.85; margin-top: 3px; }
+
+  #btnRecord1 { background: linear-gradient(135deg, #ef4444, #dc2626); }
+  #btnPlay1   { background: linear-gradient(135deg, #3b82f6, #2563eb); }
+  #btnRecord2 { background: linear-gradient(135deg, #a855f7, #7c3aed); }
+  #btnReveal  { background: linear-gradient(135deg, #10b981, #059669); }
+
+  button.pad.recording {
+    animation: pulse 1s infinite;
+  }
+  @keyframes pulse {
+    0%,100% { filter: brightness(1); }
+    50% { filter: brightness(1.35); }
+  }
+
+  .status {
+    margin-top: 16px;
+    font-size: 0.9rem;
+    color: #cbd5e1;
+    min-height: 1.4em;
+    text-align: center;
+  }
+  .hint {
+    margin-top: 4px;
+    font-size: 0.72rem;
+    color: #64748b;
+    text-align: center;
+    max-width: 400px;
+    line-height: 1.4;
+  }
+</style>
+</head>
+<body>
+  <h1>🔊 Задом наперёд</h1>
+  <p class="subtitle">Игрок 1 записывает слово. Игрок 2 слушает его задом наперёд и пробует повторить!</p>
+
+  <div class="buttons">
+    <button class="pad" id="btnRecord1">
+      <span class="icon">🎙️</span>
+      <span class="label">Записать слово<small>Игрок 1 · нажми для старта и стопа</small></span>
+    </button>
+
+    <button class="pad" id="btnPlay1" disabled>
+      <span class="icon">⏪</span>
+      <span class="label">Слушать задом наперёд<small>Игрок 2 · сколько угодно раз</small></span>
+    </button>
+
+    <button class="pad" id="btnRecord2" disabled>
+      <span class="icon">🎤</span>
+      <span class="label">Записать повтор<small>Игрок 2 · повтори, что услышал</small></span>
+    </button>
+
+    <button class="pad" id="btnReveal" disabled>
+      <span class="icon">🎯</span>
+      <span class="label">Проверить слово<small>Повтор задом наперёд — угадал?</small></span>
+    </button>
+  </div>
+
+  <div class="status" id="status">Готово к записи</div>
+  <div class="hint" id="hint"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  const btnRecord1 = document.getElementById("btnRecord1");
+  const btnPlay1   = document.getElementById("btnPlay1");
+  const btnRecord2 = document.getElementById("btnRecord2");
+  const btnReveal  = document.getElementById("btnReveal");
+  const statusEl   = document.getElementById("status");
+  const hintEl     = document.getElementById("hint");
+
+  let audioCtx = null;
+  let stream = null;
+  let mediaRecorder = null;
+  let chunks = [];
+
+  // Decoded + reversed AudioBuffers for the two recordings.
+  let reversedBuffer1 = null; // recording 1, reversed (what player 2 hears)
+  let reversedBuffer2 = null; // recording 2, reversed (the "reveal")
+
+  let activeSource = null;
+  // which recording the current MediaRecorder session is capturing: 1 or 2
+  let recordingTarget = 0;
+
+  function setStatus(msg) { statusEl.textContent = msg; }
+  function setHint(msg) { hintEl.textContent = msg || ""; }
+
+  function getAudioContext() {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    return audioCtx;
+  }
+
+  function reverseBuffer(buffer) {
+    const ctx = getAudioContext();
+    const reversed = ctx.createBuffer(
+      buffer.numberOfChannels,
+      buffer.length,
+      buffer.sampleRate
+    );
+    for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+      const src = buffer.getChannelData(ch);
+      const dst = reversed.getChannelData(ch);
+      const n = src.length;
+      for (let i = 0; i < n; i++) {
+        dst[i] = src[n - 1 - i];
+      }
+    }
+    return reversed;
+  }
+
+  function stopPlayback() {
+    if (activeSource) {
+      try { activeSource.stop(); } catch (e) {}
+      activeSource = null;
+    }
+  }
+
+  function playBuffer(buffer, onEnded) {
+    stopPlayback();
+    const ctx = getAudioContext();
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(ctx.destination);
+    source.onended = function () {
+      if (activeSource === source) activeSource = null;
+      if (onEnded) onEnded();
+    };
+    activeSource = source;
+    source.start();
+  }
+
+  async function ensureStream() {
+    if (stream) return stream;
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    return stream;
+  }
+
+  function pickMimeType() {
+    const candidates = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/mp4",
+      "audio/ogg;codecs=opus",
+      ""
+    ];
+    for (const t of candidates) {
+      if (t === "" || (window.MediaRecorder && MediaRecorder.isTypeSupported(t))) {
+        return t;
+      }
+    }
+    return "";
+  }
+
+  async function startRecording(target) {
+    try {
+      await ensureStream();
+    } catch (e) {
+      setStatus("Нет доступа к микрофону 😔");
+      setHint("Разреши доступ к микрофону в настройках браузера.");
+      return;
+    }
+    stopPlayback();
+    getAudioContext(); // unlock audio on this user gesture
+
+    chunks = [];
+    recordingTarget = target;
+    const mimeType = pickMimeType();
+    try {
+      mediaRecorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+    } catch (e) {
+      mediaRecorder = new MediaRecorder(stream);
+    }
+
+    mediaRecorder.ondataavailable = function (e) {
+      if (e.data && e.data.size > 0) chunks.push(e.data);
+    };
+    mediaRecorder.onstop = onRecordingStop;
+    mediaRecorder.start();
+  }
+
+  async function onRecordingStop() {
+    const target = recordingTarget;
+    const type = (mediaRecorder && mediaRecorder.mimeType) || "audio/webm";
+    const blob = new Blob(chunks, { type });
+    chunks = [];
+
+    if (blob.size === 0) {
+      setStatus("Запись пустая, попробуй ещё раз");
+      resetRecordButton(target);
+      return;
+    }
+
+    try {
+      const arrayBuffer = await blob.arrayBuffer();
+      const ctx = getAudioContext();
+      const decoded = await ctx.decodeAudioData(arrayBuffer);
+      const reversed = reverseBuffer(decoded);
+
+      if (target === 1) {
+        reversedBuffer1 = reversed;
+        // A new first word invalidates the previous round's reveal.
+        reversedBuffer2 = null;
+        btnPlay1.disabled = false;
+        btnRecord2.disabled = false;
+        btnReveal.disabled = true;
+        setStatus("Слово записано! ⏪ Игрок 2 — слушай задом наперёд");
+        setHint("Нажимай «Слушать задом наперёд» столько раз, сколько нужно.");
+      } else {
+        reversedBuffer2 = reversed;
+        btnReveal.disabled = false;
+        setStatus("Повтор записан! 🎯 Нажми «Проверить слово»");
+        setHint("«Проверить слово» проиграет твой повтор задом наперёд — должно получиться исходное слово.");
+      }
+    } catch (e) {
+      setStatus("Не получилось обработать аудио 😔");
+      setHint("Попробуй записать ещё раз.");
+    }
+
+    resetRecordButton(target);
+  }
+
+  function resetRecordButton(target) {
+    if (target === 1) {
+      btnRecord1.classList.remove("recording");
+      btnRecord1.querySelector(".label").firstChild.textContent = "Записать слово";
+    } else {
+      btnRecord2.classList.remove("recording");
+      btnRecord2.querySelector(".label").firstChild.textContent = "Записать повтор";
+    }
+  }
+
+  function isRecording() {
+    return mediaRecorder && mediaRecorder.state === "recording";
+  }
+
+  // ---- Button 1: record player 1's word (toggle start/stop) ----
+  btnRecord1.addEventListener("click", function () {
+    if (isRecording() && recordingTarget === 1) {
+      mediaRecorder.stop();
+      return;
+    }
+    if (isRecording()) return; // busy with the other recording
+    startRecording(1).then(function () {
+      if (isRecording()) {
+        btnRecord1.classList.add("recording");
+        btnRecord1.querySelector(".label").firstChild.textContent = "Остановить запись";
+        setStatus("Идёт запись… нажми ещё раз, чтобы остановить");
+        setHint("");
+      }
+    });
+  });
+
+  // ---- Button 2: play recording 1 reversed, unlimited times ----
+  btnPlay1.addEventListener("click", function () {
+    if (!reversedBuffer1) return;
+    btnPlay1.disabled = true;
+    setStatus("▶️ Играет задом наперёд…");
+    playBuffer(reversedBuffer1, function () {
+      btnPlay1.disabled = false;
+      setStatus("Ещё раз? Жми ⏪ сколько угодно");
+    });
+  });
+
+  // ---- Button 3: record player 2's imitation (toggle start/stop) ----
+  btnRecord2.addEventListener("click", function () {
+    if (isRecording() && recordingTarget === 2) {
+      mediaRecorder.stop();
+      return;
+    }
+    if (isRecording()) return;
+    startRecording(2).then(function () {
+      if (isRecording()) {
+        btnRecord2.classList.add("recording");
+        btnRecord2.querySelector(".label").firstChild.textContent = "Остановить запись";
+        setStatus("Идёт запись повтора… нажми ещё раз, чтобы остановить");
+        setHint("");
+      }
+    });
+  });
+
+  // ---- Button 4: reveal — play recording 2 reversed ----
+  btnReveal.addEventListener("click", function () {
+    if (!reversedBuffer2) return;
+    btnReveal.disabled = true;
+    setStatus("🎯 Играет твой повтор задом наперёд…");
+    playBuffer(reversedBuffer2, function () {
+      btnReveal.disabled = false;
+      setStatus("Похоже на исходное слово? Ещё раз — жми 🎯");
+    });
+  });
+
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    setStatus("Браузер не поддерживает запись звука 😔");
+    setHint("Открой в Safari или Chrome на телефоне.");
+    btnRecord1.disabled = true;
+  }
+})();
+</script>
+</body>
+</html>
